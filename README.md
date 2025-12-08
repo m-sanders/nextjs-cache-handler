@@ -110,6 +110,7 @@ A Redis-based handler for key- and tag-based caching. Compared to the original i
 - Key expiration using `EXAT` or `EXPIREAT`
 - Tag-based revalidation
 - Automatic TTL management
+- Optional gzip compression to reduce memory usage
 - Default `revalidateTagQuerySize`: `10_000` (safe for large caches)
 
 ```js
@@ -122,8 +123,54 @@ const redisHandler = await createRedisHandler({
   keyPrefix: "myApp:",
   sharedTagsKey: "myTags",
   sharedTagsTtlKey: "myTagTtls",
+  compression: false, // optional, enables gzip compression
 });
 ```
+
+#### Compression
+
+The `compression` option enables gzip compression of cache values before storing in Redis, significantly reducing memory usage and network transfer size.
+
+**Basic usage:**
+
+```js
+const redisHandler = await createRedisHandler({
+  client: createClient({
+    url: process.env.REDIS_URL,
+  }),
+  compression: true, // enables gzip compression
+});
+```
+
+**Optimal performance with native Buffer support:**
+
+For best performance, configure the Redis client to return Buffer objects directly using `withTypeMapping`:
+
+```js
+import { createClient, RESP_TYPES } from "redis";
+
+const client = createClient({
+  url: process.env.REDIS_URL,
+}).withTypeMapping({
+  [RESP_TYPES.BLOB_STRING]: Buffer,
+});
+
+await client.connect();
+
+const redisHandler = await createRedisHandler({
+  client,
+  compression: true,
+});
+```
+
+When configured with `withTypeMapping`, compressed data is stored and retrieved as native Buffers without base64 encoding overhead. Without this configuration, the handler will automatically fall back to base64 string encoding, which still works but is slightly less efficient.
+
+**Key details:**
+
+- Compressed entries use a `:gzip:` key prefix for separation from uncompressed entries
+- Fully backward compatible with existing uncompressed cache entries
+- Compression is detected automatically via gzip magic bytes
+- Default: `false` (disabled)
 
 #### Redis Cluster (Experimental)
 
