@@ -72,4 +72,15 @@ export type CreateRedisStringsHandlerOptions<
    * @default 'EXPIREAT'
    */
   keyExpirationStrategy?: "EXAT" | "EXPIREAT";
+  /**
+   * Optional. Enable gzip compression for cache values.
+   *
+   * @default false
+   *
+   * @remarks
+   * When enabled, cache values are compressed before storing in Redis and automatically
+   * decompressed when reading. This is fully backward compatible with existing uncompressed
+   * cache entries.
+   */
+  compression?: boolean;
 };

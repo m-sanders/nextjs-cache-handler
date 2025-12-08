@@ -6,6 +6,7 @@ import {
   convertStringsToBuffers,
   parseBuffersToStrings,
 } from "../helpers/buffer";
+import { compressValue, decompressValue } from "../helpers/compression";
 import type { RedisClientType } from "@redis/client";
 import { RedisClusterCacheAdapter } from "../helpers/redisClusterAdapter";
 import { withAbortSignalProxy } from "../helpers/withAbortSignalProxy";
@@ -33,6 +34,7 @@ export default function createHandler({
   timeoutMs = 5_000,
   keyExpirationStrategy = "EXPIREAT",
   revalidateTagQuerySize = 10_000,
+  compression = false,
 }: CreateRedisStringsHandlerOptions<
   RedisClientType | RedisClusterCacheAdapter
 >): Handler {
@@ -81,7 +83,11 @@ export default function createHandler({
 
     for (const [key, tags] of tagsMap) {
       if (tags.includes(tag)) {
-        keysToDelete.push(keyPrefix + key);
+        // Use correct cache key based on compression setting
+        const cacheKey = compression
+          ? `${keyPrefix}:gzip:${key}`
+          : keyPrefix + key;
+        keysToDelete.push(cacheKey);
         tagsToDelete.push(key);
       }
     }
@@ -136,7 +142,11 @@ export default function createHandler({
     for (const [key, ttlInSeconds] of ttlMap) {
       if (new Date().getTime() > ttlInSeconds * 1000) {
         tagsAndTtlToDelete.push(key);
-        keysToDelete.push(keyPrefix + key);
+        // Use correct cache key based on compression setting
+        const cacheKey = compression
+          ? `${keyPrefix}:gzip:${key}`
+          : keyPrefix + key;
+        keysToDelete.push(cacheKey);
       }
     }
 
@@ -168,21 +178,35 @@ export default function createHandler({
     async get(key, { implicitTags }) {
       assertClientIsReady();
 
+      // Use different key for compressed data
+      const cacheKey = compression
+        ? `${keyPrefix}:gzip:${key}`
+        : keyPrefix + key;
+
       const result = await client
         .withAbortSignal(AbortSignal.timeout(timeoutMs))
-        .get(keyPrefix + key);
+        .get(cacheKey);
 
       if (!result) {
         return null;
       }
 
-      const cacheValue = JSON.parse(result) as CacheHandlerValue | null;
+      let cacheValue: CacheHandlerValue | null;
+
+      if (compression) {
+        // Decompress if needed (auto-detects Buffer vs string, compressed vs uncompressed)
+        cacheValue = await decompressValue(result);
+      } else {
+        // Legacy path: parse and convert strings to buffers
+        cacheValue = JSON.parse(result) as CacheHandlerValue | null;
+        if (cacheValue) {
+          convertStringsToBuffers(cacheValue);
+        }
+      }
 
       if (!cacheValue) {
         return null;
       }
-
-      convertStringsToBuffers(cacheValue);
 
       const sharedTagKeyExists = await client
         .withAbortSignal(AbortSignal.timeout(timeoutMs))
@@ -191,7 +215,7 @@ export default function createHandler({
       if (!sharedTagKeyExists) {
         await client
           .withAbortSignal(AbortSignal.timeout(timeoutMs))
-          .unlink(keyPrefix + key);
+          .unlink(cacheKey);
 
         return null;
       }
@@ -213,7 +237,7 @@ export default function createHandler({
         ) {
           await client
             .withAbortSignal(AbortSignal.timeout(timeoutMs))
-            .unlink(keyPrefix + key);
+            .unlink(cacheKey);
 
           return null;
         }
@@ -227,15 +251,6 @@ export default function createHandler({
       let setOperation: Promise<string | null>;
       let expireOperation: Promise<number> | undefined;
       const lifespan = cacheHandlerValue.lifespan;
-
-      // Clone only the value object to avoid mutating Next.js's original
-      const valueForStorage = cacheHandlerValue.value
-        ? { ...cacheHandlerValue.value }
-        : null;
-
-      if (valueForStorage) {
-        parseBuffersToStrings({ ...cacheHandlerValue, value: valueForStorage });
-      }
 
       const setTagsOperation = client
         .withAbortSignal(AbortSignal.timeout(timeoutMs))
@@ -253,17 +268,40 @@ export default function createHandler({
 
       await Promise.all([setTagsOperation, setSharedTtlOperation]);
 
-      const serializedValue = JSON.stringify({
-        ...cacheHandlerValue,
-        value: valueForStorage,
-      });
+      // Use different key for compressed data
+      const cacheKey = compression
+        ? `${keyPrefix}:gzip:${key}`
+        : keyPrefix + key;
+      let serializedValue: string | Buffer;
+
+      if (compression) {
+        // Compress the value, returns a Buffer
+        serializedValue = await compressValue(cacheHandlerValue);
+      } else {
+        // Legacy path: clone and convert buffers to strings
+        const valueForStorage = cacheHandlerValue.value
+          ? { ...cacheHandlerValue.value }
+          : null;
+
+        if (valueForStorage) {
+          parseBuffersToStrings({
+            ...cacheHandlerValue,
+            value: valueForStorage,
+          });
+        }
+
+        serializedValue = JSON.stringify({
+          ...cacheHandlerValue,
+          value: valueForStorage,
+        });
+      }
 
       switch (keyExpirationStrategy) {
         case "EXAT": {
           setOperation = client
             .withAbortSignal(AbortSignal.timeout(timeoutMs))
             .set(
-              keyPrefix + key,
+              cacheKey,
               serializedValue,
               typeof lifespan?.expireAt === "number"
                 ? {
@@ -276,12 +314,12 @@ export default function createHandler({
         case "EXPIREAT": {
           setOperation = client
             .withAbortSignal(AbortSignal.timeout(timeoutMs))
-            .set(keyPrefix + key, serializedValue);
+            .set(cacheKey, serializedValue);
 
           expireOperation = lifespan
             ? client
                 .withAbortSignal(AbortSignal.timeout(timeoutMs))
-                .expireAt(keyPrefix + key, lifespan.expireAt)
+                .expireAt(cacheKey, lifespan.expireAt)
             : undefined;
           break;
         }
@@ -310,9 +348,14 @@ export default function createHandler({
       await Promise.all([revalidateTag(tag), revalidateSharedKeys()]);
     },
     async delete(key) {
+      // Use correct cache key based on compression setting
+      const cacheKey = compression
+        ? `${keyPrefix}:gzip:${key}`
+        : keyPrefix + key;
+
       await client
         .withAbortSignal(AbortSignal.timeout(timeoutMs))
-        .unlink(keyPrefix + key);
+        .unlink(cacheKey);
 
       await Promise.all([
         client
