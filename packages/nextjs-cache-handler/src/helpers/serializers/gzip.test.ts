@@ -1,13 +1,13 @@
 import { gunzip } from "node:zlib";
 import { promisify } from "node:util";
-import { compressValue, decompressValue } from "./compression";
-import type { CacheHandlerValue } from "../handlers/cache-handler.types";
+import { gzipSerializer } from "./gzip";
+import type { CacheHandlerValue } from "../../handlers/cache-handler.types";
 import type { CachedRouteKind } from "next/dist/server/response-cache";
 
 const gunzipAsync = promisify(gunzip);
 
-describe("compression", () => {
-  describe("compressValue", () => {
+describe("gzipSerializer", () => {
+  describe("serialize", () => {
     it("should compress a cache value with APP_ROUTE kind", async () => {
       const cacheValue: CacheHandlerValue = {
         lastModified: Date.now(),
@@ -28,7 +28,7 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
+      const compressed = await gzipSerializer.serialize(cacheValue);
 
       expect(Buffer.isBuffer(compressed)).toBe(true);
       expect(compressed.length).toBeGreaterThan(0);
@@ -64,7 +64,7 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
+      const compressed = await gzipSerializer.serialize(cacheValue);
 
       expect(Buffer.isBuffer(compressed)).toBe(true);
       expect(compressed[0]).toBe(0x1f);
@@ -98,7 +98,7 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
+      const compressed = await gzipSerializer.serialize(cacheValue);
 
       expect(Buffer.isBuffer(compressed)).toBe(true);
 
@@ -118,7 +118,7 @@ describe("compression", () => {
         value: null,
       };
 
-      const compressed = await compressValue(cacheValue);
+      const compressed = await gzipSerializer.serialize(cacheValue);
 
       expect(Buffer.isBuffer(compressed)).toBe(true);
       expect(compressed[0]).toBe(0x1f);
@@ -142,7 +142,7 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
+      const compressed = await gzipSerializer.serialize(cacheValue);
 
       expect(Buffer.isBuffer(compressed)).toBe(true);
 
@@ -165,7 +165,7 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
+      const compressed = await gzipSerializer.serialize(cacheValue);
 
       // Compressed size should be much smaller than original
       const decompressed = await gunzipAsync(compressed);
@@ -175,7 +175,7 @@ describe("compression", () => {
     });
   });
 
-  describe("decompressValue", () => {
+  describe("deserialize", () => {
     it("should decompress a Buffer with gzip magic bytes", async () => {
       const cacheValue: CacheHandlerValue = {
         lastModified: 123456,
@@ -189,8 +189,8 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
-      const decompressed = await decompressValue(compressed);
+      const compressed = await gzipSerializer.serialize(cacheValue);
+      const decompressed = await gzipSerializer.deserialize(compressed);
 
       expect(decompressed).not.toBeNull();
       expect(decompressed!.lastModified).toBe(123456);
@@ -213,10 +213,10 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
+      const compressed = await gzipSerializer.serialize(cacheValue);
       const base64String = compressed.toString("base64");
 
-      const decompressed = await decompressValue(base64String);
+      const decompressed = await gzipSerializer.deserialize(base64String);
 
       expect(decompressed).not.toBeNull();
       expect(decompressed!.lastModified).toBe(123456);
@@ -237,7 +237,7 @@ describe("compression", () => {
       };
 
       const jsonString = JSON.stringify(cacheValue);
-      const decompressed = await decompressValue(jsonString);
+      const decompressed = await gzipSerializer.deserialize(jsonString);
 
       expect(decompressed).not.toBeNull();
       expect(decompressed!.lastModified).toBe(123456);
@@ -262,8 +262,8 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
-      const decompressed = await decompressValue(compressed);
+      const compressed = await gzipSerializer.serialize(cacheValue);
+      const decompressed = await gzipSerializer.deserialize(compressed);
 
       expect(decompressed).not.toBeNull();
       expect(decompressed!.value?.kind).toBe("APP_PAGE");
@@ -293,8 +293,8 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(cacheValue);
-      const decompressed = await decompressValue(compressed);
+      const compressed = await gzipSerializer.serialize(cacheValue);
+      const decompressed = await gzipSerializer.deserialize(compressed);
 
       expect(decompressed).not.toBeNull();
       const decompressedValue = decompressed!.value as any;
@@ -312,12 +312,12 @@ describe("compression", () => {
     });
 
     it("should return null for empty string", async () => {
-      const result = await decompressValue("");
+      const result = await gzipSerializer.deserialize("");
       expect(result).toBeNull();
     });
 
     it("should return null for null input", async () => {
-      const result = await decompressValue(null as any);
+      const result = await gzipSerializer.deserialize(null as any);
       expect(result).toBeNull();
     });
 
@@ -325,11 +325,11 @@ describe("compression", () => {
       const corruptedBuffer = Buffer.from([0x1f, 0x8b, 0xff, 0xff, 0xff]);
       const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation();
 
-      const result = await decompressValue(corruptedBuffer);
+      const result = await gzipSerializer.deserialize(corruptedBuffer);
 
       expect(result).toBeNull();
       expect(consoleErrorSpy).toHaveBeenCalledWith(
-        "Failed to decompress cache value:",
+        "Failed to deserialize gzip cache value:",
         expect.objectContaining({
           message: expect.any(String),
         }),
@@ -342,7 +342,7 @@ describe("compression", () => {
       const invalidJson = "not valid json";
       const consoleErrorSpy = jest.spyOn(console, "error").mockImplementation();
 
-      const result = await decompressValue(invalidJson);
+      const result = await gzipSerializer.deserialize(invalidJson);
 
       expect(result).toBeNull();
       expect(consoleErrorSpy).toHaveBeenCalled();
@@ -351,7 +351,7 @@ describe("compression", () => {
     });
   });
 
-  describe("compress/decompress round-trip", () => {
+  describe("serialize/deserialize round-trip", () => {
     it("should preserve all data through compress/decompress cycle", async () => {
       const originalValue: CacheHandlerValue = {
         lastModified: 1234567890,
@@ -372,8 +372,8 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(originalValue);
-      const decompressed = await decompressValue(compressed);
+      const compressed = await gzipSerializer.serialize(originalValue);
+      const decompressed = await gzipSerializer.deserialize(compressed);
 
       expect(decompressed).not.toBeNull();
       expect(decompressed!.lastModified).toBe(originalValue.lastModified);
@@ -401,8 +401,8 @@ describe("compression", () => {
         },
       };
 
-      const compressed = await compressValue(originalValue);
-      const decompressed = await decompressValue(compressed);
+      const compressed = await gzipSerializer.serialize(originalValue);
+      const decompressed = await gzipSerializer.deserialize(compressed);
 
       expect(decompressed).not.toBeNull();
       expect(decompressed!.tags).toEqual([]);
@@ -423,8 +423,8 @@ describe("compression", () => {
       };
 
       // Simulate Redis with BLOB_STRING support returning Buffer
-      const compressed = await compressValue(originalValue);
-      const decompressed = await decompressValue(compressed); // Receives Buffer directly
+      const compressed = await gzipSerializer.serialize(originalValue);
+      const decompressed = await gzipSerializer.deserialize(compressed); // Receives Buffer directly
 
       expect(decompressed).not.toBeNull();
       expect((decompressed!.value as any).body.toString()).toBe(
@@ -446,9 +446,9 @@ describe("compression", () => {
       };
 
       // Simulate Redis without BLOB_STRING support returning base64 string
-      const compressed = await compressValue(originalValue);
+      const compressed = await gzipSerializer.serialize(originalValue);
       const base64String = compressed.toString("base64");
-      const decompressed = await decompressValue(base64String); // Receives string
+      const decompressed = await gzipSerializer.deserialize(base64String); // Receives string
 
       expect(decompressed).not.toBeNull();
       expect((decompressed!.value as any).body.toString()).toBe(

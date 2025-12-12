@@ -1,5 +1,6 @@
 import type { RedisClientType } from "@redis/client";
 import { RedisClusterCacheAdapter } from "../helpers/redisClusterAdapter";
+import type { CacheSerializer } from "../helpers/serializers";
 
 export type RedisCompliantCachedRouteValue = {
   // See: https://github.com/vercel/next.js/blob/f5444a16ec2ef7b82d30048890b613aa3865c1f1/packages/next/src/server/response-cache/types.ts#L97
@@ -73,14 +74,23 @@ export type CreateRedisStringsHandlerOptions<
    */
   keyExpirationStrategy?: "EXAT" | "EXPIREAT";
   /**
-   * Optional. Enable gzip compression for cache values.
+   * Optional. Custom serializer for cache values.
    *
-   * @default false
+   * @default defaultSerializer
    *
    * @remarks
-   * When enabled, cache values are compressed before storing in Redis and automatically
-   * decompressed when reading. This is fully backward compatible with existing uncompressed
-   * cache entries.
+   * Serializers control how cache values are converted to/from storage format.
+   * Use built-in serializers (defaultSerializer, gzipSerializer) or provide a custom implementation.
+   *
+   * Example with gzip compression:
+   * ```typescript
+   * import { gzipSerializer } from "@fortedigital/nextjs-cache-handler/redis-strings/serializers";
+   *
+   * const handler = createRedisHandler({
+   *   client,
+   *   serializer: gzipSerializer
+   * });
+   * ```
    */
-  compression?: boolean;
+  serializer?: CacheSerializer;
 };
